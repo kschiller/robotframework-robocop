@@ -7,13 +7,13 @@ from robot.api import get_model
 from robocop import checkers
 from robocop.config import Config
 from robocop import reports
-from robocop.utils import DisablersFinder, FileType, FileTypeChecker
+from robocop.utils import DisablersFinder, FileType, FileTypeChecker, RobotFile
+from robocop.checkers.errors import ParsingErrorChecker
 import robocop.exceptions
 
 
 class Robocop:
     def __init__(self, from_cli=False):
-        self.files = {}
         self.checkers = []
         self.out = sys.stdout
         self.rules = {}
@@ -38,7 +38,6 @@ class Robocop:
 
     def run(self):
         """ Entry point for running scans """
-        self.recognize_file_types()
         self.run_checks()
         self.make_reports()
         if not self.out.closed:
@@ -47,38 +46,59 @@ class Robocop:
             if report.name == 'return_status':
                 sys.exit(report.return_status)
 
-    def recognize_file_types(self):
+    def recognize_file_type(self, file_type_checker, file, files):
         """
-        Pre-parse files to recognize their types. If the filename is `__init__.robot`, the type is `INIT`.
+        Pre-parse file to recognize its type. If the filename is `__init__.*`, the type is `INIT`.
+        Files with .resource extension are 'RESOURCE' type.
         If the file is imported somewhere then file type is `RESOURCE`. Otherwise file type is `GENERAL`.
         These types are important since they are used to define parsing class for robot API.
         """
+        if '__init__' in file.source.name:
+            file.type = FileType.INIT
+        elif file.source.suffix.lower() == '.resource':
+            file.type = FileType.RESOURCE
+        else:
+            file.type = FileType.GENERAL
+        files[file.source] = file
+        file_type_checker.source = file.source
+        model = get_model(file.source)
+        file_type_checker.visit(model)
+        return files
+
+    def run_checks(self):
         if not self.config.paths:
             print('No path has been provided')
             sys.exit()
-        files = self.config.paths
-        for file in self.get_files(files, self.config.recursive):
-            if file.name == '__init__.robot':
-                self.files[file] = FileType.INIT
-            else:
-                self.files[file] = FileType.GENERAL
-        file_type_checker = FileTypeChecker(self.files, self.config.exec_dir)
-        for file in self.files:
-            file_type_checker.source = file
-            model = get_model(file)
-            file_type_checker.visit(model)
-
-    def run_checks(self):
-        for file in self.files:
+        files = {file: RobotFile(file) for file in self.get_files(self.config.paths, self.config.recursive)}
+        file_type_checker = FileTypeChecker(files, self.config.exec_dir)
+        parsed_files = {}
+        for file, robot_file in files.items():
             self.register_disablers(file)
             if self.disabler.file_disabled:
                 continue
-            model = self.files[file].get_parser()(str(file))
+            files = self.recognize_file_type(file_type_checker, robot_file, files)
+            robot_file = files[file]
+            robot_file.scanned_with_type = robot_file.type
+            parsed_files[file] = robot_file
+            model = robot_file.type.get_parser()(str(file))
             for checker in self.checkers:
                 if checker.disabled:
                     continue
                 checker.source = str(file)
                 checker.scan_file(model)
+        self.run_checks_on_files_with_type_changed(parsed_files)
+
+    def run_checks_on_files_with_type_changed(self, files):
+        for checker in self.checkers:
+            if isinstance(checker, ParsingErrorChecker):
+                for file, robot_file in files.items():
+                    if robot_file.scanned_with_type == robot_file.type:
+                        continue
+                    model = robot_file.type.get_parser()(str(file))
+                    checker.parse_only_section_not_allowed = True
+                    checker.source = file
+                    checker.scan_file(model)
+                break
 
     def register_disablers(self, file):
         """ Parse content of file to find any disabler statements like # robocop: disable=rulename """
@@ -158,7 +178,7 @@ class Robocop:
 
     def should_parse(self, file):
         """ Check if file extension is in list of supported file types (can be configured from cli) """
-        return file.suffix and file.suffix in self.config.filetypes
+        return file.suffix and file.suffix.lower() in self.config.filetypes
 
     def any_rule_enabled(self, checker):
         for name, rule in checker.rules_map.items():

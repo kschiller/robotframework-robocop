@@ -25,6 +25,13 @@ class FileType(Enum):
         }[self.value]
 
 
+class RobotFile:
+    def __init__(self, source):
+        self.source = source
+        self.type = FileType.GENERAL
+        self.scanned_with_type = None
+
+
 class FileTypeChecker(ast.NodeVisitor):
     """
     Check if file contains import statements. If the import is in list of files to be scanned, update its type
@@ -48,7 +55,7 @@ class FileTypeChecker(ast.NodeVisitor):
         else:
             path = Path(path_normalized)
             if path in self.files:
-                self.files[path] = FileType.RESOURCE
+                self.files[path].type = FileType.RESOURCE
 
 
 def normalize_robot_path(robot_path, curr_path, exec_path):

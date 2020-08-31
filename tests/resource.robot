@@ -2,6 +2,10 @@
 *** Variables ***
 ${var}  5
 
+*** Test Cases ***
+Test Should Not Be There
+    My External Keywords
+
 *** Keywords ***  # section comment
 My External Keywords
     [Arguments]  ${arg1}=0  ${aRg2}=0

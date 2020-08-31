@@ -19,5 +19,11 @@ class ParsingErrorChecker(VisitorChecker):
         )
     }
 
+    def __init__(self, *args):
+        self.parse_only_section_not_allowed = False
+        super().__init__(*args)
+
     def visit_Error(self, node):  # noqa
+        if self.parse_only_section_not_allowed and 'Resource file with' not in node.error:
+            return
         self.report("parsing-error", node.error, node=node)
